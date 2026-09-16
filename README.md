@@ -63,6 +63,16 @@ OpenCode 1.4.x emits the `permission.asked` event _after_ it has already queued 
 
 ## Install
 
+OpenCode v2 uses the native v2 entrypoint:
+
+```json
+{
+  "plugins": ["opencode-delegated-access/v2"]
+}
+```
+
+The existing package entrypoint remains available for OpenCode v1.
+
 ### 1. Clone and install dependencies
 
 ```bash
