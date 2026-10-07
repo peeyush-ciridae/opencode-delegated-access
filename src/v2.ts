@@ -1,7 +1,17 @@
 import type { Context, Plugin } from "@opencode/plugin/promise/plugin"
 import { randomUUID } from "node:crypto"
 import { spawn } from "node:child_process"
+import { appendFile } from "node:fs/promises"
+import { homedir } from "node:os"
+import { join } from "node:path"
 import DelegatedAccess from "./index.ts"
+
+const LOG_FILE = join(homedir(), ".local/share/opencode/log/delegated-access.log")
+
+function requestKey(request: { sessionID: string; action: string; resources: readonly string[]; source?: unknown }): string {
+  const source = request.source as { id?: string } | undefined
+  return JSON.stringify([request.sessionID, request.action, source?.id ?? null, request.resources])
+}
 
 function textFromParts(parts: Array<{ type?: string; text?: string }> = []): string {
   return parts.filter((part) => part.type === "text").map((part) => part.text ?? "").join("\n")
@@ -63,10 +73,14 @@ function legacyClient(ctx: Context) {
   return {
     app: {
       log: async ({ body }: any) => {
-        const line = `[${body?.service ?? "delegated-access"}] ${body?.message ?? ""}`
-        if (body?.level === "error") console.error(line)
-        else if (body?.level === "warn") console.warn(line)
-        else console.info(line)
+        const entry = {
+          timestamp: new Date().toISOString(),
+          level: body?.level ?? "info",
+          service: body?.service ?? "delegated-access",
+          message: body?.message ?? "",
+          ...(body?.extra !== undefined ? { extra: body.extra } : {}),
+        }
+        await appendFile(LOG_FILE, JSON.stringify(entry) + "\n")
         return { data: true }
       },
     },
@@ -74,7 +88,9 @@ function legacyClient(ctx: Context) {
     session: {
       get: async ({ path }: any) => ({ data: await ctx.session.get({ sessionID: path.id }) }),
       messages: async ({ path }: any) => ({
-        data: (await ctx.session.context({ sessionID: path.id })).map((message: any) =>
+        data: (await ctx.session.context({ sessionID: path.id }))
+          .filter((message: any) => message.type !== "synthetic" && message.type !== "system")
+          .map((message: any) =>
           legacyMessage(message, path.id)
         ),
       }),
@@ -85,8 +101,10 @@ function legacyClient(ctx: Context) {
       },
       prompt: async ({ body }: any) => {
         const prompt = [body?.system, textFromParts(body?.parts)].filter(Boolean).join("\n\n")
-        const model = body?.model?.providerID && body?.model?.modelID
-          ? { providerID: body.model.providerID, id: body.model.modelID }
+        // `classifierModel` may carry a reasoning variant: "openai/gpt-5-mini#low".
+        const [modelID, variant] = String(body?.model?.modelID ?? "").split("#")
+        const model = body?.model?.providerID && modelID
+          ? { providerID: body.model.providerID, id: modelID, ...(variant ? { variant } : {}) }
           : undefined
         const generated = await ctx.generate.text({ prompt, ...(model ? { model } : {}) })
         const text = generated?.text ?? ""
@@ -107,7 +125,7 @@ function legacyClient(ctx: Context) {
       await ctx.permission.reply({
         sessionID: path.id,
         requestID: path.permissionID,
-        reply: body.response,
+        decision: body.response,
       })
       return { data: true }
     },
@@ -117,6 +135,11 @@ function legacyClient(ctx: Context) {
 const DelegatedAccessV2: Plugin = {
   id: "opencode-delegated-access",
   async setup(ctx) {
+    // The evaluate hook runs before OpenCode assigns the request ID, so link the
+    // legacy ID to `permission.asked` by request identity, then to its reply.
+    // ponytail: entries for requests the classifier approved are never asked and stay in the map; bounded by session length.
+    const legacyIDByRequestKey = new Map<string, string>()
+    const legacyIDByRequestID = new Map<string, string>()
     const legacy = await DelegatedAccess({
       client: legacyClient(ctx),
       directory: ctx.location.directory,
@@ -127,14 +150,21 @@ const DelegatedAccessV2: Plugin = {
     } as any, ctx.options as any) as any
 
     await ctx.permission.hook("evaluate", async (event) => {
+      // Preserve configured allows and denies; classify only approval requests.
+      if (event.effect !== "ask") return
+      if (event.action !== "shell" && event.action !== "external_directory") return
+      const legacyAction = event.action === "shell" ? "bash" : event.action
+      const patterns = [...event.resources]
       const output = { status: event.effect }
+      const legacyID = randomUUID()
+      legacyIDByRequestKey.set(requestKey(event), legacyID)
       const permission = {
-        id: event.source?.id ?? `${event.sessionID}:${event.action}:${event.resources.join("|")}`,
+        id: legacyID,
         sessionID: event.sessionID,
-        permission: event.action,
-        patterns: [...event.resources],
-        type: event.action,
-        pattern: [...event.resources],
+        permission: legacyAction,
+        patterns,
+        type: legacyAction,
+        pattern: patterns,
       }
       await legacy["permission.ask"]?.(permission, output)
       event.effect = output.status
@@ -158,9 +188,21 @@ const DelegatedAccessV2: Plugin = {
     const controller = new AbortController()
     const watcher = (async () => {
       try {
-        for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+        for await (const event of ctx.event.subscribe({ signal: controller.signal }) as AsyncIterable<any>) {
+          if (event.type === "permission.asked") {
+            const legacyID = legacyIDByRequestKey.get(requestKey(event.data))
+            if (!legacyID) continue
+            legacyIDByRequestKey.delete(requestKey(event.data))
+            legacyIDByRequestID.set(event.data.id, legacyID)
+            continue
+          }
           if (event.type !== "permission.replied") continue
-          await legacy.event?.({ event: { type: event.type, properties: event.data } })
+          const legacyID = legacyIDByRequestID.get(event.data.requestID)
+          if (!legacyID) continue
+          legacyIDByRequestID.delete(event.data.requestID)
+          await legacy.event?.({
+            event: { type: event.type, properties: { sessionID: event.data.sessionID, permissionID: legacyID, response: event.data.reply } },
+          })
         }
       } catch (error) {
         if (!controller.signal.aborted) console.error("delegated-access event bridge failed", error)
