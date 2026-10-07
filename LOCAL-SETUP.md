@@ -28,7 +28,7 @@ human prompts. Decisions are logged to
 `~/.local/share/opencode/log/delegated-access.log`.
 The classifier uses OpenCode's text-generation API without tools. Failures retain
 the human approval prompt. Existing upstream notification/countdown behavior is
-retained. Approval history is enabled: `src/v2.ts` links each classified request
+retained. Approval history is optional (disabled on this Mac): `src/v2.ts` links each classified request
 to OpenCode's `permission.asked` ID and forwards `permission.replied` so human
 approvals and rejections reach `<prior_human_approvals>` (in memory, per root
 session, last 20). `classifierModel: "typesafe/jev-latest"` classifies with TypeSafe Jev
@@ -38,3 +38,12 @@ human prompt. Any `provider/model[#variant]` value uses OpenCode generation.
 
 Verification: `npm run check` and `npm test`. This is a local, unmerged PR port;
 updates are manual. `npm audit` reports inherited dependency vulnerabilities.
+
+Read-only shell policy explicitly permits complex source-inspection pipelines
+without task context or matching branches; source names and credential-related
+search terms alone do not imply secret access. Actual credential reads, execution,
+writes, and uploads still require review.
+Live regression check (requires authenticated OpenCode and uses paid Haiku calls):
+`node --experimental-strip-types scripts/check-read-policy.mjs`. It classifies
+commands without executing them, with no history or user context and mismatched
+branches; it is opt-in and not part of `npm test`.
