@@ -18,7 +18,9 @@ import {
 import { resolveClassifierModel, type ModelRef } from "../classifier/model.ts"
 import { resolveRootSessionID } from "../ui/session-tree.ts"
 import {
+  CLOUD_CLASSIFIER_SYSTEM_PROMPT,
   DIRECTORY_CLASSIFIER_SYSTEM_PROMPT,
+  buildCloudClassifierUserPrompt,
   buildDirectoryClassifierUserPrompt,
 } from "../classifier/prompt.ts"
 import { DirectoryVerdictCache } from "./directory-cache.ts"
@@ -47,6 +49,9 @@ const BASH_TYPE_MATCHES = new Set(["bash", "command"])
 
 /** Runtime permission type string for external-directory access. */
 const EXTERNAL_DIRECTORY_TYPE = "external_directory"
+
+/** Synthetic type the V2 entrypoint uses for aws/azure/gcloud MCP tool calls. */
+const CLOUD_TOOL_TYPE = "cloud_tool"
 
 export type HandlerContext = {
   client: OpencodeClient
@@ -243,6 +248,25 @@ export async function handlePermissionEvent(
     return
   }
 
+  if (toolType === CLOUD_TOOL_TYPE) {
+    const call = extractCommand(patterns)
+    if (call === null) {
+      log.info("skip: no tool call in cloud_tool pattern", base)
+      return
+    }
+    await handleSubjectPermission({
+      subject: call,
+      subjectLabel: "command",
+      systemPrompt: CLOUD_CLASSIFIER_SYSTEM_PROMPT,
+      buildUserPrompt: buildCloudClassifierUserPrompt,
+      permission,
+      ctx,
+      output,
+      base,
+    })
+    return
+  }
+
   log.info("skip: unsupported permission type", base)
 }
 
@@ -263,6 +287,7 @@ async function handleSubjectPermission(args: {
   subject: string
   subjectLabel: "command" | "path"
   systemPrompt: string | null
+  buildUserPrompt?: typeof buildDirectoryClassifierUserPrompt
   permission: Permission
   ctx: HandlerContext
   output: HandlerOutput | undefined
@@ -273,6 +298,7 @@ async function handleSubjectPermission(args: {
     subject,
     subjectLabel,
     systemPrompt,
+    buildUserPrompt = buildDirectoryClassifierUserPrompt,
     permission,
     ctx,
     output,
@@ -484,7 +510,7 @@ async function handleSubjectPermission(args: {
           ...commonClassifyArgs,
           subject,
           systemPrompt,
-          buildUserPrompt: buildDirectoryClassifierUserPrompt,
+          buildUserPrompt,
           onFailure,
         })
 
