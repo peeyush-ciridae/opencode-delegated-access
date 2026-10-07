@@ -1,4 +1,13 @@
-# Local OpenCode V2 port
+# OpenCode V2 build
+
+Install from this branch; the package entry is the V2 plugin (`src/v2.ts`, V1
+entry at `./v1`):
+
+```jsonc
+"plugins": [{ "package": "github:peeyush-ciridae/opencode-delegated-access#peeyush/local-setup", "options": { } }]
+```
+
+Pull new commits with `opencode plugin update`.
 
 Based on upstream PR https://github.com/jdtzmn/opencode-delegated-access/pull/2,
 commit 1715f887c100459cd952ecad7d1c65fb6cde3371.

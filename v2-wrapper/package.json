@@ -1,6 +1,0 @@
-{
-  "name": "local-delegated-access-v2",
-  "private": true,
-  "type": "module",
-  "main": "./index.ts"
-}

@@ -3,10 +3,10 @@
   "version": "0.4.0",
   "description": "OpenCode plugin that auto-approves safe bash commands via an LLM safety classifier and escalates risky ones with an OS notification.",
   "type": "module",
-  "main": "./src/index.ts",
+  "main": "./src/v2.ts",
   "exports": {
-    ".": "./src/index.ts",
-    "./v2": "./src/v2.ts"
+    ".": "./src/v2.ts",
+    "./v1": "./src/index.ts"
   },
   "scripts": {
     "check": "tsc --noEmit",
