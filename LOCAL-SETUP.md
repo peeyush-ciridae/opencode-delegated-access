@@ -32,7 +32,11 @@ pending tool input from the session (under Code Mode, the whole `execute`
 script). Calls whose input cannot be found or exceeds 8000 characters stay as
 human prompts. Decisions are logged to
 `~/.local/share/opencode/log/delegated-access.log`.
-The classifier uses OpenCode's text-generation API without tools. Failures retain
+The classifier uses `ctx.session.generate` in a disposable session with its own
+model and isolated classifier system prompt. This runs provider authentication
+hooks without inheriting the working transcript or changing its model. The
+transient prompt is not written to history; the disposable session is removed
+afterward. No agent tool-execution loop runs. Failures retain
 the human approval prompt. Existing upstream notification/countdown behavior is
 retained. Approval history is optional (disabled on this Mac): `src/v2.ts` links each classified request
 to OpenCode's `permission.asked` ID and forwards `permission.replied` so human

@@ -135,7 +135,6 @@ function legacyMessage(message: any, sessionID: string) {
 }
 
 function legacyClient(ctx: Context) {
-  const ephemeral = new Map<string, unknown>()
   return {
     app: {
       log: async ({ body }: any) => {
@@ -161,22 +160,23 @@ function legacyClient(ctx: Context) {
         ),
       }),
       create: async (input: any = {}) => {
-        const id = randomUUID()
-        ephemeral.set(id, input.body ?? input)
-        return { data: { id, parentID: input.body?.parentID } }
+        // Do not inherit the working session's transcript or change its model.
+        const session = await ctx.session.create({ title: input.body?.title })
+        return { data: { id: session.id, parentID: input.body?.parentID } }
       },
-      prompt: async ({ body }: any) => {
+      prompt: async ({ path, body }: any) => {
         if (body?.model?.providerID === "typesafe") {
           const text = await classifyWithJev(String(body.model.modelID), String(body?.system ?? ""), textFromParts(body?.parts))
           return { data: { info: { id: randomUUID(), role: "assistant" }, parts: [{ type: "text", text }] } }
         }
-        const prompt = [body?.system, textFromParts(body?.parts)].filter(Boolean).join("\n\n")
+        const prompt = textFromParts(body?.parts)
         // `classifierModel` may carry a reasoning variant: "openai/gpt-6-luna#none".
         const [modelID, variant] = String(body?.model?.modelID ?? "").split("#")
         const model = body?.model?.providerID && modelID
           ? { providerID: body.model.providerID, id: modelID, ...(variant ? { variant } : {}) }
           : undefined
-        const generated = await ctx.generate.text({ prompt, ...(model ? { model } : {}) })
+        if (model) await ctx.session.switchModel({ sessionID: path.id, model })
+        const generated = await ctx.session.generate({ sessionID: path.id, prompt })
         const text = generated?.text ?? ""
         const structured = body?.format?.type === "json_schema" ? parseJson(text) : undefined
         return {
@@ -187,7 +187,7 @@ function legacyClient(ctx: Context) {
         }
       },
       delete: async ({ path }: any) => {
-        ephemeral.delete(path.id)
+        await ctx.session.remove({ sessionID: path.id })
         return { data: true }
       },
     },
@@ -278,6 +278,15 @@ const DelegatedAccessV2: Plugin = {
       if (output.system.length !== event.system.length || output.system.some((text: string, index: number) => text !== event.system[index]?.text)) {
         event.system.splice(0, event.system.length, ...output.system.map((text: string) => ({ type: "text" as const, text })))
       }
+    })
+
+    await ctx.session.hook("generate", async (event) => {
+      const output = { system: event.system.map((part) => part.text) }
+      await legacy["experimental.chat.system.transform"]?.(
+        { sessionID: event.sessionID, model: event.model },
+        output,
+      )
+      event.system.splice(0, event.system.length, ...output.system.map((text: string) => ({ type: "text" as const, text })))
     })
 
     const controller = new AbortController()

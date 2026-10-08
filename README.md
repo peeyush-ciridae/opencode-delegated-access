@@ -55,7 +55,7 @@ Every time OpenCode would prompt for a bash command **or an external directory a
                 block
 ```
 
-The classifier call happens in an **ephemeral child session** of your current session, using OpenCode's own provider + auth — no extra API keys, no extra packages to configure. It's hidden from session lists and deleted when done.
+The classifier uses OpenCode's own provider and authentication—no extra API keys. V1 uses an ephemeral child session. V2 creates a disposable session without the working transcript, selects the classifier model, and calls `session.generate` so provider HTTP hooks (including Anthropic OAuth) run. The classifier policy replaces global instructions, the transient prompt is not added to history, and the session is removed afterward. V2 may briefly show the disposable session in session lists.
 
 ### About that TUI flash
 
@@ -67,11 +67,11 @@ OpenCode v2 uses the native v2 entrypoint:
 
 ```json
 {
-  "plugins": ["opencode-delegated-access/v2"]
+  "plugins": ["opencode-delegated-access"]
 }
 ```
 
-The existing package entrypoint remains available for OpenCode v1.
+OpenCode v1 remains available through `opencode-delegated-access/v1`.
 
 ### 1. Clone and install dependencies
 
@@ -176,7 +176,7 @@ The desktop notifications with Approve / Reject buttons work via `terminal-notif
 - **The classifier never sees the agent's messages.** Only yours. A rogue assistant can't smuggle "this command is safe, trust me" into the judge's context. Same for directory access — the classifier answers "did the human's recent messages justify this path?" not "does the agent think it's safe?"
 - **Subagents don't weaken that.** When a permission fires inside a subagent session, the plugin walks up the session tree to the root and pulls _your_ messages from there — never the dispatching agent's prompt to the subagent. If the tree can't be verified (SDK error, unexpected cycle, too deep) the plugin fails closed and leaves the TUI prompt for you. Even on the root session, user-role messages are filtered to the root's primary agent so synthetic "user" turns addressed elsewhere never leak in.
 - **Every error leaves the TUI prompt alone.** Classifier timeout, API error, malformed verdict, missing subject, session-tree lookup failure, unexpected exception — none of them call the respond API, so the TUI prompt stays and you decide manually. The plugin only ever _dismisses_ a prompt after an affirmative SAFE decision, never silently passes through on errors.
-- **The classifier can't call tools.** The ephemeral session runs with `tools: { "*": false }`, so even a compromised classifier model can only return text.
+- **The classifier can't execute tools.** V1 disables tools on its ephemeral prompt; V2 uses transient text generation without an agent tool-execution loop.
 - **Risky commands and risky directory requests get two channels, not one.** The TUI prompt stays up AND the notification fires with Approve/Reject. Whichever you answer first wins — no bug in the notification path can ever accidentally auto-approve a RISKY request.
 - **The classifier can't trigger itself.** We track ephemeral classifier sessions and ignore permission events from them.
 - **The directory cache only speeds things up; it can't change a RISKY verdict.** Only SAFE verdicts are cached. A RISKY verdict for any path always triggers the escalation notification — the cache only deduplicates rapid burst requests for a path that was already classified SAFE.
