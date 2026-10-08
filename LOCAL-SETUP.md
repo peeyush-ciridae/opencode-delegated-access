@@ -20,7 +20,13 @@ The global config selects the last five human user messages and Anthropic Haiku.
 Shell and external-directory approvals use the classifier. Trusted directory
 boundaries (`~/orca/*`, OpenCode worktrees and logs) are allowed directly by
 `external_directory` rules in the global config, so they never reach it.
-`aws_*`, `azure_*`, and `gcloud_*` MCP asks are also classified (`cloud_tool`):
+Read-only requests skip the classifier (`src/read-only-requests.ts`): an
+`external_directory` ask raised by `read`, `grep`, `glob` or `list` is allowed,
+and a cloud MCP call whose literal arguments are only reads (gcloud
+`list`/`describe`/`read`, Azure `list`/`get`/`show` commands, AWS docs tools and
+`run_script` calls limited to `describe_*`/`list_*`/`get_*`) is allowed. Secret
+reads such as `gcloud secrets versions access` count as writes.
+Other `aws_*`, `azure_*`, and `gcloud_*` MCP asks are classified (`cloud_tool`):
 the V2 permission event carries only the tool name, so `src/v2.ts` reads the
 pending tool input from the session (under Code Mode, the whole `execute`
 script). Calls whose input cannot be found or exceeds 8000 characters stay as

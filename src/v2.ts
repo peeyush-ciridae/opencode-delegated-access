@@ -5,6 +5,7 @@ import { appendFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import DelegatedAccess from "./index.ts"
+import { classifyCloudAccess, isReadOnlyFileTool } from "./read-only-requests.ts"
 
 const LOG_FILE = join(homedir(), ".local/share/opencode/log/delegated-access.log")
 
@@ -44,21 +45,38 @@ const MAX_TOOL_CALL_CHARS = 8000
 
 // MCP permission requests carry only the tool name; the arguments live on the
 // pending tool part of the assistant message named by `event.source`.
-async function findPendingToolCall(
+async function findPendingToolPart(
   ctx: Context,
-  event: { sessionID: string; action: string; source?: unknown },
-): Promise<string | undefined> {
+  event: { sessionID: string; source?: unknown },
+): Promise<{ name?: string; state?: { input?: any } } | undefined> {
   const source = event.source as { messageID?: string; id?: string } | undefined
   if (!source?.messageID || !source.id) return undefined
   const messages: any[] = [...(await ctx.session.context({ sessionID: event.sessionID }))]
   const message = messages.find((item) => item.id === source.messageID)
-  const part = (message?.content ?? []).find((item: any) => item.type === "tool" && item.id === source.id)
+  return (message?.content ?? []).find((item: any) => item.type === "tool" && item.id === source.id)
+}
+
+function renderPendingToolCall(
+  action: string,
+  part: { name?: string; state?: { input?: any } } | undefined,
+): string | undefined {
   const input = part?.state?.input
   if (input === undefined) return undefined
   const rendered = typeof input?.code === "string" ? input.code : JSON.stringify(input, null, 2)
   // Never classify a truncated call: unseen code could hide a write.
   if (rendered.length > MAX_TOOL_CALL_CHARS) return undefined
-  return `permission: ${event.action}\ntool: ${part.name}\ninput:\n${rendered}`
+  return `permission: ${action}\ntool: ${part?.name}\ninput:\n${rendered}`
+}
+
+async function logReadOnlyApproval(event: { action: string; resources: readonly string[] }, reason: string): Promise<void> {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    level: "info",
+    service: "delegated-access",
+    message: "allow: read-only request",
+    extra: { action: event.action, reason, resources: event.resources },
+  }
+  await appendFile(LOG_FILE, JSON.stringify(entry) + "\n").catch(() => {})
 }
 
 function textFromParts(parts: Array<{ type?: string; text?: string }> = []): string {
@@ -210,10 +228,22 @@ const DelegatedAccessV2: Plugin = {
         legacyAction = "bash"
         patterns = [...event.resources]
       } else if (event.action === "external_directory") {
+        const part = await findPendingToolPart(ctx, event)
+        if (isReadOnlyFileTool(part?.name)) {
+          await logReadOnlyApproval(event, `${part?.name} outside the project`)
+          event.effect = "allow"
+          return
+        }
         legacyAction = event.action
         patterns = [...event.resources]
       } else if (CLOUD_TOOL_ACTION.test(event.action)) {
-        const call = await findPendingToolCall(ctx, event)
+        const part = await findPendingToolPart(ctx, event)
+        if (classifyCloudAccess(event.action, part?.state?.input) === "read") {
+          await logReadOnlyApproval(event, "read-only cloud call")
+          event.effect = "allow"
+          return
+        }
+        const call = renderPendingToolCall(event.action, part)
         if (!call) return
         legacyAction = "cloud_tool"
         patterns = [call]
